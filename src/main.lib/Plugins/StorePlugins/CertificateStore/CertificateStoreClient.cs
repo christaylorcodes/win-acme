@@ -181,7 +181,7 @@ namespace PKISharp.WACS.Plugins.StorePlugins
             _log.Debug("Storing certificate with flags {flags}", finalFlags);
 
             X509Certificate2? store;
-            if (_settings.Store.CertificateStore.UseNextGenerationCryptoApi != true)
+            if (_settings.Store.CertificateStore.UseNextGenerationCryptoApi == false)
             {
                 // Should always be exportable before we attempt to convert,
                 // because otherwise we won't be able to get to the private key

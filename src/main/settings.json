@@ -102,7 +102,7 @@
     "CertificateStore": {
       "DefaultStore": null,
       "PrivateKeyExportable": false,
-      "UseNextGenerationCryptoApi": false
+      "UseNextGenerationCryptoApi": true
     },
     "CentralSsl": {
       "DefaultPath": null,
