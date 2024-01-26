@@ -46,7 +46,6 @@ param(
     [string]$OldCertThumbprint
 
 )
-$RetryCount = 5
 
 Write-Output 'Local initialization'
 $System = Get-CimInstance Win32_ComputerSystem
@@ -56,8 +55,9 @@ try { Import-Module RemoteDesktopServices }
 catch {
     Write-Output "Could not load Remote Desktop Services module on $($LocalHost)"
     Write-Output "Error: $($_)"
-    # return
-    # Do you check exit codes?
+    # Looks like you check for exit codes
+    # Any info on codes I should use?
+    # Seems any non 0 exit code cancels the renewal?
     Exit 1
 }
 
@@ -66,8 +66,6 @@ $CertInStore = Get-ChildItem -Path Cert:\LocalMachine\My -Recurse | Where-Object
 } | Sort-Object -Descending | Select-Object -First 1
 if (!$CertInStore) {
     Write-Output 'Cert thumbprint not found in the My cert store... have you specified --certificatestore My?'
-    # return
-    # Do you check exit codes?
     Exit 1
 }
 
@@ -81,8 +79,6 @@ try {
 catch {
     Write-Output 'Could not create remote PowerShell Session to Remote Desktop Connection Broker'
     Write-Output "Error: $($_)"
-    # return
-    # Do you check exit codes?
     Exit 1
 }
 
@@ -91,8 +87,6 @@ if ($RDCB -ne $LocalHost) {
     catch {
         Write-Output "Could not load Remote Desktop Services module on $($RDCB)"
         Write-Output "Error: $($_)"
-        # return
-        # Do you check exit codes?
         Exit 1
     }
 }
@@ -104,28 +98,34 @@ try {
     Add-Type -AssemblyName 'System.Web'
     $tempPasswordPfx = [System.Web.Security.Membership]::GeneratePassword(10, 5) | ConvertTo-SecureString -Force -AsPlainText
     $tempPfxPath = New-TemporaryFile | Rename-Item -PassThru -NewName { $_.name -Replace '\.tmp$', '.pfx' }
-    $null = Export-PfxCertificate -Cert $CertInStore -FilePath $tempPfxPath -Force -NoProperties -Password $tempPasswordPfx
+    $ExportSplat = @{
+        Cert         = $CertInStore 
+        FilePath     = $tempPfxPath
+        Force        = $true
+        NoProperties = $true
+        Password     = $tempPasswordPfx
+    }
+    $null = Export-PfxCertificate @ExportSplat
 }
 catch {
     Write-Output 'Could not export temporary certificate, certificates not set.'
     Write-Output "Error: $($_)"
-    # return
-    # Do you check exit codes?
     Exit 1
 }
 
 Write-Output 'Updating roles:'
-$RDCertificateSplat = @{
-    ImportPath       = $tempPfxPath
-    Password         = $tempPasswordPfx
-    ConnectionBroker = $RDCB
-    Force            = $true
-    ErrorAction      = 'Stop'
-}
 $Roles = 'RDPublishing', 'RDWebAccess', 'RDRedirector', 'RDGateway'
 foreach ($Role in $Roles) {
     try {
-        Set-RDCertificate @RDCertificateSplat -Role $Role
+        $SetSplat = @{
+            Role             = $Role
+            ImportPath       = $tempPfxPath
+            Password         = $tempPasswordPfx
+            ConnectionBroker = $RDCB
+            Force            = $true
+            ErrorAction      = 'Stop'
+        }
+        Set-RDCertificate @SetSplat
         Write-Output "$($Role) Certificate for RDS was set"
     } 
     catch {
@@ -157,7 +157,10 @@ catch {
 }
 
 # TSGateway service has issues restarting, retry a few times
+# Might not be needed as Set-RDCertificate has retry
+# Not hurting to check anyway?
 try {
+    $RetryCount = 5
     $Retry = 0
     do {
         Start-Sleep -Seconds $Retry
