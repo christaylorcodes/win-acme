@@ -49,11 +49,12 @@ param(
 $RetryCount = 5
 
 Write-Output 'Local initialization'
-$LocalHost = (Get-WmiObject win32_computersystem).DNSHostName + '.' + (Get-WmiObject win32_computersystem).Domain
+$System = Get-CimInstance Win32_ComputerSystem
+$LocalHost = '{0}.{1}' -f $System.DNSHostName, $System.Domain
 
 try { Import-Module RemoteDesktopServices }
 catch {
-    Write-Output "Could not load Remote Desktop Services module on $LocalHost"
+    Write-Output "Could not load Remote Desktop Services module on $($LocalHost)"
     Write-Output "Error: $($_)"
     # return
     # Do you check exit codes?
@@ -73,7 +74,7 @@ if (!$CertInStore) {
 if (!$PSBoundParameters.ContainsKey('RDCB')) { $RDCB = $LocalHost } 
 try {
     if ($RDCB -ne $LocalHost) { 
-        Write-Output "Remote initialization: $RDCB"
+        Write-Output "Remote initialization: $($RDCB)"
         $RDCBPS = New-PSSession -ComputerName $RDCB 
     }
 }
@@ -88,7 +89,7 @@ catch {
 if ($RDCB -ne $LocalHost) {
     try { Invoke-Command -Session $RDCBPS { Import-Module RemoteDesktopServices } }
     catch {
-        Write-Output "Could not load Remote Desktop Services module on $RDCB"
+        Write-Output "Could not load Remote Desktop Services module on $($RDCB)"
         Write-Output "Error: $($_)"
         # return
         # Do you check exit codes?
@@ -98,13 +99,15 @@ if ($RDCB -ne $LocalHost) {
 
 try {
     Write-Output 'Exporting certificate'
+    # Plans to support powershell 7+?
+    # This assembly is not available
     Add-Type -AssemblyName 'System.Web'
     $tempPasswordPfx = [System.Web.Security.Membership]::GeneratePassword(10, 5) | ConvertTo-SecureString -Force -AsPlainText
     $tempPfxPath = New-TemporaryFile | Rename-Item -PassThru -NewName { $_.name -Replace '\.tmp$', '.pfx' }
     $null = Export-PfxCertificate -Cert $CertInStore -FilePath $tempPfxPath -Force -NoProperties -Password $tempPasswordPfx
 }
 catch {
-    Write-Output 'Could not export temporary Certificate. RD Gateway, RD WebAccess, RD Redirector and RD Connection Broker certificates not set.'
+    Write-Output 'Could not export temporary certificate, certificates not set.'
     Write-Output "Error: $($_)"
     # return
     # Do you check exit codes?
@@ -123,10 +126,10 @@ $Roles = 'RDPublishing', 'RDWebAccess', 'RDRedirector', 'RDGateway'
 foreach ($Role in $Roles) {
     try {
         Set-RDCertificate @RDCertificateSplat -Role $Role
-        Write-Output "$Role Certificate for RDS was set"
+        Write-Output "$($Role) Certificate for RDS was set"
     } 
     catch {
-        Write-Output "$Role Certificate for RDS was not set"
+        Write-Output "$($Role) Certificate for RDS was not set"
         Write-Output "Error: $($_)"
         # Not sure it is good to terminate the script once import has started
         # Import to as many roles as possible is better than stopping at first error?
@@ -178,11 +181,15 @@ finally {
     if ($RDCB -ne $LocalHost) {
         if ($PSBoundParameters.ContainsKey('OldCertThumbprint')) {
             $RemoteCert = Invoke-Command -Session $RDCBPS { 
-                Get-ChildItem -Path Cert:\LocalMachine\My -Recurse | Where-Object { $_.thumbprint -eq $Using:NewCertThumbprint } 
+                Get-ChildItem -Path Cert:\LocalMachine\My -Recurse | Where-Object {
+                    $_.thumbprint -eq $Using:NewCertThumbprint 
+                } 
             }
             if ($RemoteCert -and $RemoteCert.thumbprint -ne $OldCertThumbprint) {
                 Invoke-Command -Session $RDCBPS {
-                    Get-ChildItem -Path Cert:\LocalMachine\My -Recurse | Where-Object { $_.thumbprint -eq $Using:OldCertThumbprint } | Remove-Item
+                    Get-ChildItem -Path Cert:\LocalMachine\My -Recurse | Where-Object { 
+                        $_.thumbprint -eq $Using:OldCertThumbprint 
+                    } | Remove-Item
                 }
             }
             else { Write-Output 'Remote cert not changed, skipping deletion.' }
