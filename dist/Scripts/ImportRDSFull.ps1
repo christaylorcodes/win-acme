@@ -42,9 +42,8 @@ param(
     [string]$NewCertThumbprint,
     [Parameter(Position = 1, Mandatory = $false)]
     [string]$RDCB,
-    [Parameter(Position = 3, Mandatory = $false)]
+    [Parameter(Position = 2, Mandatory = $false)]
     [string]$OldCertThumbprint
-
 )
 
 Write-Output 'Local initialization'
@@ -57,7 +56,17 @@ catch {
     Write-Output "Error: $($_)"
     # Looks like you check for exit codes
     # Any info on codes I should use?
-    # Seems any non 0 exit code cancels the renewal?
+    # Seems any non 0 exit code cancels the renewal and will retry on next schedule?
+    Exit 1
+}
+
+try {
+    $RDS = Get-RDServer $RDCB -ErrorAction Stop
+    Write-Output "RDCB found, detected roles: $($RDS.Roles -join ', ')"
+}
+catch {
+    Write-Output "Unable to find RDCB: $($RDCB)"
+    Write-Output "Error: $($_)"
     Exit 1
 }
 
@@ -113,9 +122,20 @@ catch {
     Exit 1
 }
 
-Write-Output 'Updating roles:'
-$Roles = 'RDPublishing', 'RDWebAccess', 'RDRedirector', 'RDGateway'
-foreach ($Role in $Roles) {
+try {
+    $Existing = Get-RDCertificate -ConnectionBroker $RDCB -ErrorAction Stop
+    Write-Output 'Existing certificates:'
+    Write-Output $Existing | Out-String
+}
+catch {
+    Write-Output "Unable to get a list of certificates from: $($RDCB)"
+    Write-Output "Error: $($_)"
+    Exit 1
+}
+
+Write-Output 'Updating certificates'
+$Issue = $false
+foreach ($Role in $Existing.Role) {
     try {
         $SetSplat = @{
             Role             = $Role
@@ -133,7 +153,9 @@ foreach ($Role in $Roles) {
         Write-Output "Error: $($_)"
         # Not sure it is good to terminate the script once import has started
         # Import to as many roles as possible is better than stopping at first error?
-        # return
+        # Looks like giving an exit code will cancel the renewal and try again
+        # Maybe it is better to throw an exit code and try again?
+        $Issue = $true
     }
 }
 
@@ -153,29 +175,7 @@ catch {
     Write-Output 'RDWebClient Certificate for RDS was not set'
     Write-Output "Error: $($_)"
     # Same, not sure it is beneficial to terminate the script at this point
-    # return
-}
-
-# TSGateway service has issues restarting, retry a few times
-# Might not be needed as Set-RDCertificate has retry
-# Not hurting to check anyway?
-try {
-    $RetryCount = 5
-    $Retry = 0
-    do {
-        Start-Sleep -Seconds $Retry
-        Start-Service TSGateway -ErrorAction SilentlyContinue
-        $TSGatewayService = Get-Service TSGateway
-        $Retry++
-    }
-    while ($TSGatewayService.Status -ne 'Running' -and $Retry -lt $RetryCount)
-    Start-Service TSGateway -ErrorAction Stop
-} 
-catch {
-    Write-Output 'TSGateway service was not started'
-    Write-Output "Error: $($_)"
-    # Same, not sure it is beneficial to terminate the script at this point
-    # return
+    $Issue = $true
 }
 
 finally {
@@ -199,4 +199,5 @@ finally {
         } 
         Remove-PSSession $RDCBPS
     }
+    if ($Issue) { Exit 1 }
 }
