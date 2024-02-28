@@ -101,7 +101,7 @@ if ($RDCB -ne $LocalHost) {
 
 try {
     $Existing = Get-RDCertificate -ConnectionBroker $RDCB -ErrorAction Stop
-    Write-Output 'Existing certificates:'
+    Write-Output 'Starting Certificate Status:'
     Write-Output $Existing | Out-String
 }
 catch {
@@ -110,8 +110,9 @@ catch {
     Exit 1
 }
 
-Write-Output 'Updating certificates'
+Write-Output 'Updating certificates:'
 $Issue = $false
+$Padding = ($Existing.Role.ForEach{ $_.toString().Length } | Measure-Object -Maximum).Maximum + 1
 foreach ($Role in $Existing.Role) {
     try {
         $SetSplat = @{
@@ -123,11 +124,20 @@ foreach ($Role in $Existing.Role) {
             ErrorAction      = 'Stop'
         }
         Set-RDCertificate @SetSplat
-        Write-Output "$($Role) certificate set"
+        Write-Output "$("${Role}".PadRight($Padding,' ')): SUCCESS"
     } 
     catch {
-        Write-Output "$($Role) certificate NOT set"
-        Write-Output "Error: $($_)"
+        # There is always an issue with these roles failing due to restart timeout
+        if ($Role -in @('RDGateway', 'RDWebAccess')) {
+            $null = Start-Service 'TSGateway' -ErrorAction SilentlyContinue
+            $Service = Get-Service 'TSGateway'
+            if ($Service.Status -eq 'Running') { 
+                Write-Output "$("${Role}".PadRight($Padding,' ')): SUCCESS"
+                continue 
+            }
+        }
+        Write-Output "$("${Role}".PadRight($Padding,' ')): ERROR"
+        Write-Output "- $($_)"
         # Not sure it is good to terminate the script once import has started
         # Import to as many roles as possible is better than stopping at first error?
         # Looks like giving an exit code will cancel the renewal and try again
@@ -139,23 +149,35 @@ foreach ($Role in $Existing.Role) {
 # Configure Certificate that RDWebClient checks for
 # Warning: browser caching can keep the old Certificate for a long time!
 try {
+    $Role = 'RDWebClient'
     if ((Get-Command -Module RDWebClientManagement | Measure-Object).Count -eq 0) {
-        Write-Output 'RDWebClient not installed, skipping'
+        Write-Output "$("${Role}".PadRight($Padding,' ')): SKIPPING"
     }
     else {
         Remove-RDWebClientBrokerCert
         Import-RDWebClientBrokerCert -Path $CacheFile -Password $Password
-        Write-Output 'RDWebClient Certificate for RDS was set'
+        Write-Output "$("${Role}".PadRight($Padding,' ')): SUCCESS"
     }
 }
 catch {
-    Write-Output 'RDWebClient Certificate for RDS was not set'
-    Write-Output "Error: $($_)"
+    "$("${Role}".PadRight($Padding,' ')): ERROR"
+    Write-Output "- $($_)"
     # Same, not sure it is beneficial to terminate the script at this point
     $Issue = $true
 }
 
 finally {
+    try {
+        $Existing = Get-RDCertificate -ConnectionBroker $RDCB -ErrorAction Stop
+        Write-Output 'Ending Certificate Status:'
+        Write-Output $Existing | Out-String
+    }
+    catch {
+        Write-Output "Unable to get a list of certificates from: $($RDCB)"
+        Write-Output "Error: $($_)"
+        Exit 1
+    }
+    
     # Wait to throw until the end?
     # Seems it is better to try to apply to everything?
     if ($Issue) { Exit 1 }
