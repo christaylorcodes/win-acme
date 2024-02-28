@@ -49,7 +49,7 @@ param(
     [string]$OldCertThumbprint
 )
 
-Write-Output 'Local initialization'
+Write-Output 'Starting RDS Certificate Import'
 
 $Password = $CachePassword | ConvertTo-SecureString -Force -AsPlainText
 Remove-Variable CachePassword
@@ -64,16 +64,6 @@ catch {
     # Looks like you check for exit codes
     # Any info on codes I should use?
     # Seems any non 0 exit code cancels the renewal and will retry on next schedule?
-    Exit 1
-}
-
-try {
-    $RDS = Get-RDServer $RDCB -ErrorAction Stop
-    Write-Output "RDCB found, detected roles: $($RDS.Roles -join ', ')"
-}
-catch {
-    Write-Output "Unable to find RDCB: $($RDCB)"
-    Write-Output "Error: $($_)"
     Exit 1
 }
 
@@ -100,9 +90,17 @@ if ($RDCB -ne $LocalHost) {
 }
 
 try {
+    $null = Get-RDServer $RDCB -ErrorAction Stop
+    Write-Output "RDCB: $RDCB"
+}
+catch {
+    Write-Output "Unable to find RDCB: $($RDCB)"
+    Write-Output "Error: $($_)"
+    Exit 1
+}
+
+try {
     $Existing = Get-RDCertificate -ConnectionBroker $RDCB -ErrorAction Stop
-    Write-Output 'Starting Certificate Status:'
-    Write-Output $Existing | Out-String
 }
 catch {
     Write-Output "Unable to get a list of certificates from: $($RDCB)"
@@ -124,7 +122,7 @@ foreach ($Role in $Existing.Role) {
             ErrorAction      = 'Stop'
         }
         Set-RDCertificate @SetSplat
-        Write-Output "$("${Role}".PadRight($Padding,' ')): SUCCESS"
+        Write-Output " $("${Role}".PadRight($Padding,' ')): SUCCESS"
     } 
     catch {
         # There is always an issue with these roles failing due to restart timeout
@@ -132,11 +130,11 @@ foreach ($Role in $Existing.Role) {
             $null = Start-Service 'TSGateway' -ErrorAction SilentlyContinue
             $Service = Get-Service 'TSGateway'
             if ($Service.Status -eq 'Running') { 
-                Write-Output "$("${Role}".PadRight($Padding,' ')): SUCCESS"
+                Write-Output " $("${Role}".PadRight($Padding,' ')): SUCCESS"
                 continue 
             }
         }
-        Write-Output "$("${Role}".PadRight($Padding,' ')): ERROR"
+        Write-Output " $("${Role}".PadRight($Padding,' ')): ERROR"
         Write-Output "- $($_)"
         # Not sure it is good to terminate the script once import has started
         # Import to as many roles as possible is better than stopping at first error?
@@ -151,38 +149,40 @@ foreach ($Role in $Existing.Role) {
 try {
     $Role = 'RDWebClient'
     if ((Get-Command -Module RDWebClientManagement | Measure-Object).Count -eq 0) {
-        Write-Output "$("${Role}".PadRight($Padding,' ')): SKIPPING"
+        Write-Output " $("${Role}".PadRight($Padding,' ')): SKIPPING"
     }
     else {
         Remove-RDWebClientBrokerCert
         Import-RDWebClientBrokerCert -Path $CacheFile -Password $Password
-        Write-Output "$("${Role}".PadRight($Padding,' ')): SUCCESS"
+        Write-Output " $("${Role}".PadRight($Padding,' ')): SUCCESS"
     }
 }
 catch {
-    "$("${Role}".PadRight($Padding,' ')): ERROR"
+    Write-Output " $("${Role}".PadRight($Padding,' ')): ERROR"
     Write-Output "- $($_)"
     # Same, not sure it is beneficial to terminate the script at this point
     $Issue = $true
 }
 
-finally {
-    try {
-        $Existing = Get-RDCertificate -ConnectionBroker $RDCB -ErrorAction Stop
-        Write-Output 'Ending Certificate Status:'
-        Write-Output $Existing | Out-String
-    }
-    catch {
-        Write-Output "Unable to get a list of certificates from: $($RDCB)"
-        Write-Output "Error: $($_)"
-        Exit 1
-    }
-    
+try {
+    $Existing = Get-RDCertificate -ConnectionBroker $RDCB -ErrorAction Stop
+    Write-Output ' '
+    Write-Output 'Certificate Status:'
+    Write-Output $Existing | Out-String
+}
+catch {
+    Write-Output "Unable to get a list of certificates from: $($RDCB)"
+    Write-Output "Error: $($_)"
+    $Issue = $true
+}
+
+finally {    
     # Wait to throw until the end?
     # Seems it is better to try to apply to everything?
     if ($Issue) { Exit 1 }
+
     if ($RDCB -ne $LocalHost) {
-        Write-Output 'Cleaning up'
+        Write-Output "Removing old cert from: $RDCB"
         if ($PSBoundParameters.ContainsKey('OldCertThumbprint')) {
             Invoke-Command -Session $RDCBPS {
                 Get-ChildItem -Path Cert:\LocalMachine\My -Recurse | Where-Object { 
@@ -192,4 +192,5 @@ finally {
         } 
         Remove-PSSession $RDCBPS
     }
+    Write-Output 'Success'
 }
