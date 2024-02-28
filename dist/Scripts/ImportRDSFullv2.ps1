@@ -54,10 +54,7 @@ Write-Output 'Starting RDS Certificate Import'
 $Password = $CachePassword | ConvertTo-SecureString -Force -AsPlainText
 Remove-Variable CachePassword
 
-$System = Get-CimInstance Win32_ComputerSystem
-$LocalHost = '{0}.{1}' -f $System.DNSHostName, $System.Domain
-
-try { Import-Module RemoteDesktopServices }
+try { Get-Module @('RemoteDesktopServices', 'RemoteDesktop') -ListAvailable | Import-Module }
 catch {
     Write-Output "Could not load Remote Desktop Services module on $($LocalHost)"
     Write-Output "Error: $($_)"
@@ -67,6 +64,8 @@ catch {
     Exit 1
 }
 
+$System = Get-CimInstance Win32_ComputerSystem
+$LocalHost = '{0}.{1}' -f $System.DNSHostName, $System.Domain
 if (!$PSBoundParameters.ContainsKey('RDCB')) { $RDCB = $LocalHost } 
 
 if ($RDCB -ne $LocalHost) {
